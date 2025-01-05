@@ -5,6 +5,11 @@ source("2 - Data Prep.R")
 library(jtools)
 library(patchwork)
 
+# For LASSO modelling
+library(glmnet)
+
+
+
 #library(MASS)
 
 # Define functions used elsewhere
@@ -64,7 +69,8 @@ model <- glm(
     is_sunday +
     extra_coffee +
     any_stress +
-    any_travel +
+    any_medication +
+    #any_travel +
     any_plane +
     #weekday +
     migraine_yesterday +
@@ -74,12 +80,12 @@ model <- glm(
     badsleep_d +
     activity_d +
     #active_cals100 +
-    high_activity_hrs +
-    #medhigh_activity_hrs +
-    med_activity_hrs +
-    low_activity_hrs +
-    #sedentary_hrs_c +
-    #resting_hrs_c +
+    activity_high_hrs +
+    #activity_medhigh_hrs +
+    activity_med_hrs +
+    activity_low_hrs +
+    activity_sedentary_hrs_c +
+    activity_resting_hrs_c +
     #drinks_total + 
     drink_sessions_gt1 +
     drink_session_biggest +
@@ -115,7 +121,7 @@ all_effect_plots(model)
 
 
 
-# Select more parsimonious model
+# Select more parsimonious model ------------------------------------------
 
 # Perform stepwise selection with AIC
   # (Avoid loading MASS as conflicts with dplyr on use of select())
@@ -132,21 +138,82 @@ plot_summs(stepwise_model, model,
   labs(title = "Migraine model", x = "Odds ratio")
 
 
+# LASSO version -----------------------------------------------------------
 
-# Hand-crafted model
+#  Key insights from using LASSO:
+# - Model complexity indicated from k-fold cross-validation (~16 substantive vars)
+# - Drinks: GT1 is strongest, also in are Wine and having anything
+#
+
+# Prepare data
+X <- model_data_days %>%
+  select(-c(starts_with("migraine"), 
+            starts_with("days"), 
+            date, prev_migraine), 
+         migraine_yesterday) %>%
+  makeX(na.impute = TRUE)
+
+Y <- model_data_days$migraine
+
+# Fit the LASSO model
+lasso_model <- cv.glmnet(X, Y, 
+                         nfolds = 20,
+                         family = "binomial", alpha = 1)
+
+# View results
+plot(lasso_model)
+
+# View variable importance and coefficients
+coef(lasso_model, s = "lambda.min")
+
+# Extract non-zero coefficients for the optimal lambda
+lasso_coef <- coef(lasso_model, s = "lambda.min") |> 
+  as.matrix() |> 
+  as_tibble(rownames = "variable") |> 
+  rename(value = s1) |> 
+  filter(abs(value) >= 1E-3)
+
+# Create a bar plot
+lasso_coef |> 
+  filter(variable != "(Intercept)") |> 
+  mutate(abs_value = abs(value)) |> 
+  arrange(desc(abs_value)) |> 
+  ggplot(aes(x = reorder(variable, abs_value), y = value, fill = value > 0)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(
+    title = "LASSO Coefficients",
+    x = "Variable",
+    y = "Coefficient Value"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("red", "blue"), labels = c("Negative", "Positive")) +
+  theme(legend.position = "top")
+
+
+# Hand-crafted model -----------------------------------------------------
+# Variables in here for the following reasons:
+# - Selected clearly by AIC stepwise or LASSO (e.g. Saturday, drink_sessions_gt1)
+# - Stablemates to those variables (e.g. Sunday, drink_session_biggest)
+#   (either collinear or conceptually related)
 
 model_final <- glm(
   migraine ~ 
     is_saturday + 
     is_sunday + 
     any_plane +
+    any_medication +
     extra_coffee +
     migraine_yesterday +
     weeks_since_last +
-    high_activity_hrs +
-    med_activity_hrs +
-    drink_sessions_gt1 +
-    drinks_any,
+    activity_high_hrs +
+    activity_med_hrs +
+    activity_sedentary_hrs_c +
+    activity_resting_hrs_c +
+    drink_session_biggest +
+    drinks_any +
+    drink_any_wine,
+  
     data = model_data_days, 
   family = binomial(link = "logit")
 )
@@ -155,10 +222,10 @@ model_final <- glm(
 # Jtools summary
 summ(model_final, exp = TRUE, vif = TRUE)
 
-plot_summs(model, 
-           model_final, 
+plot_summs(model_final, 
+           model, 
            stepwise_model, 
-           model.names = c("Full", "Custom", "AIC Stepwise"),
+           model.names = c("Final", "Full", "AIC Stepwise"),
            exp = TRUE, inner_ci_level = 0.67) +
   scale_x_log10(breaks = scales::breaks_log(n = 15)) +
   coord_cartesian(xlim = c(0.3, 7)) +
@@ -169,118 +236,9 @@ all_effect_plots(model_final)
 
 
 
-# LASSO version -----------------------------------------------------------
-
-library(glmnet)
-
-# Prepare data
-X <- model_data_days %>%
-  select(-migraine) %>%
-  as.matrix()
-
-y <- model_data_days$migraine
-
-# Fit the LASSO model
-lasso_model <- cv.glmnet(X, y, family = "binomial", alpha = 1)
-
-# View results
-plot(lasso_model)
 
 
 
-
-# Interactive tool --------------------------------------------------------
-
-ui <- fluidPage(
-  titlePanel("GLM Prediction Explorer"),
-  
-  fluidRow(
-    column(12, h4("Interactive Control Panels")),
-    uiOutput("control_panels")
-  )
-)
-
-server <- function(input, output) {
-  
-  # Define all controls and their ranges
-  controls <- list(
-    list(name = "migraine_yesterday", type = "checkbox", default = FALSE, range = c(FALSE, TRUE)),
-    list(name = "is_saturday",        type = "checkbox", default = FALSE, range = c(FALSE, TRUE)),
-    list(name = "any_travel",         type = "checkbox", default = FALSE, range = c(FALSE, TRUE)),
-    list(name = "extra_coffee",       type = "checkbox", default = FALSE, range = c(FALSE, TRUE)),
-    list(name = "weeks_since_last",   type = "slider", default = 0, range = seq(0, 2, by = 1/7)),
-    list(name = "high_activity_hrs",  type = "slider", default = 0, range = seq(0, 10, by = 1)),
-    list(name = "med_activity_hrs",   type = "slider", default = 1, range = seq(0, 10, by = 1)),
-    list(name = "sedentary_hrs",      type = "slider", default = 9, range = seq(0, 12, by = 1)),
-    list(name = "drink_session_biggest_gt1", type = "slider", default = 0, range = seq(0, 4, by = 1)),
-    list(name = "drinks_any",         type = "checkbox", default = 9, range = c(FALSE, TRUE))
-  )
-  
-  # Generate UI for each control
-  output$control_panels <- renderUI({
-    control_panels <- lapply(controls, function(control) {
-      input_control <- switch(
-        control$type,
-        "checkbox" = checkboxInput(control$name, label = control$name, value = inputs[[control$name]]),
-        "slider" = sliderInput(control$name, label = control$name, min = control$range[1],
-                               max = tail(control$range, n=1), value = control$default)
-      )
-      
-      plot_output <- plotOutput(paste0(control$name, "_plot"), height = "150px")
-      
-      # Arrange control and plot in a small panel
-      column(
-        4,
-        div(style = "border: 1px solid #ccc; padding: 10px; margin: 5px; border-radius: 5px;",
-            input_control,
-            plot_output)
-      )
-    })
-    
-    # Arrange panels in a grid
-    fluidRow(control_panels)
-  })
-  
-  # Generate prediction plots for each control
-  lapply(controls, function(control) {
-    output[[paste0(control$name, "_plot")]] <- renderPlot({
-      base_data <- as.data.frame(reactiveValuesToList(inputs))
-      
-      # Generate predictions for the range of the current control
-      pred_data <- data.frame(
-        value = control$range,
-        prediction = sapply(control$range, function(val) {
-          base_data[[control$name]] <- val
-          predict(model_final, newdata = base_data, type = "response")
-        })
-      )
-      
-      # Filter the pred_data where the value matches the current input
-      selected_value <- input[[control$name]]
-      pred_data$highlight <- ifelse(pred_data$value == selected_value, "red", "black")
-      
-      # Plot the prediction results
-      ggplot(pred_data, aes(x = value, y = prediction)) +
-        geom_point(aes(colour = highlight), size = 3) +
-        scale_color_identity() +
-        labs(title = control$name, x = NA, y = "Prediction") +
-        scale_y_continuous(limits = c(0,1)) +
-        theme(axis.text.x = element_text(size = 8), axis.text.y = element_text(size = 8))
-    })
-  })
-  
-  # Update reactive values when inputs change
-  observe({
-    lapply(controls, function(control) {
-      inputs[[control$name]] <- input[[control$name]]
-    })
-  })
-}
-
-
-
-# Run the Shiny app
-shinyApp(ui = ui, server = server)
 
 # Looking at interactions -------------------------------------------------
 
@@ -318,7 +276,7 @@ pred <- model_data_days %>%
 
 # Create bins for predicted probabilities
 calibration_data <- pred %>%
-  mutate(bin = cut(predicted_prob, breaks = seq(0, 1, by = 0.075), include.lowest = TRUE)) %>%
+  mutate(bin = cut(predicted_prob, breaks = seq(0.025, 1, by = 0.05), include.lowest = TRUE)) %>%
   group_by(bin) %>%
   summarize(
     mean_predicted = mean(predicted_prob),
@@ -327,15 +285,34 @@ calibration_data <- pred %>%
   ) %>%
   filter(!is.na(bin))  # Remove empty bins
 
+# Calculate binomial confidence intervals for each bin
+calibration_data <- calibration_data %>%
+  mutate(
+    # Calculate the number of successes in each bin
+    successes = round(observed_proportion * n),
+    # Get binomial confidence intervals using binom.test
+    ci = purrr::pmap(list(successes, n), ~binom.test(.x, .y, conf.level = 0.67)$conf.int),  # Use pmap to apply binom.test correctly
+    ci_low = purrr::map_dbl(ci, 1),   # Lower bound of confidence interval
+    ci_high = purrr::map_dbl(ci, 2)   # Upper bound of confidence interval
+  )
+
+
 # Plot calibration
-ggplot(calibration_data, aes(x = mean_predicted, y = observed_proportion, size = n, label = n)) +
-  geom_point(alpha = 0.5) +
-  scale_size_area(max_size = 10) +
+ggplot(calibration_data, aes(x = mean_predicted, y = observed_proportion, label = n)) +
   geom_abline(linetype = "dashed", color = "red") +
   geom_text(size = 3, hjust = 0, vjust = 0.5, nudge_x = 0.01) +
+  geom_errorbar(
+    aes(ymin = ci_low, ymax = ci_high),
+    width = 0.00,
+    color = "black", alpha = 0.2, linewidth = 1
+  ) +
+  geom_point(aes(size = n), alpha = 0.5) +
+  scale_size_area(max_size = 10) +
+  scale_x_continuous(breaks = scales::breaks_width(0.2)) +
   coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
   labs(
     title = "Calibration Plot",
+    subtitle = "Error bars show 67% confidence intervals\n(A well-calibrated model will see ~67% of confidence lines overlap the diagonal)",
     x = "Mean Predicted Probability",
     y = "Observed Proportion"
   ) +
@@ -366,19 +343,21 @@ prior <- c(
 bayes_model <- brm(
   migraine ~ 
     is_saturday + 
-    is_sunday +
-    
-    any_travel +
+    is_sunday + 
+    any_plane +
+    any_medication +
     extra_coffee +
-    
     migraine_yesterday +
     weeks_since_last +
-    
-    high_activity_hrs +
-    med_activity_hrs +
-    
+    activity_high_hrs +
+    activity_med_hrs +
+    activity_low_hrs +
+    activity_sedentary_hrs_c +
+    activity_resting_hrs_c +
     drink_sessions_gt1 +
-    drinks_any
+    drink_session_biggest +
+    drinks_any +
+    drink_any_wine
   ,
   data = model_data_days,
   family = bernoulli(link = "logit"),
