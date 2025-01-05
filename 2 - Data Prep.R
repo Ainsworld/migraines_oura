@@ -26,45 +26,19 @@ if (fetch_data) {
 #'   has got significant, not the very start of it.
 
 
-# Bit of EDA of the tags --------------------------------------------------
 
 
-# tags |> group_by(tag_type) |> count() |> arrange(desc(n)) |> print(n = 40)
-# tags |> filter(tag_type == 'custom') |> print(n = 100)
-# 
-# 
-# model_data_days  |>  summarise(across(everything(), mean, na.rm = TRUE)) |> glimpse()
-# colSums(is.na(model_data_days))
-
-tag_summary <- tags %>%
-  group_by(start_day, tag_type) %>%
-  summarise(tag_count = n(), .groups = "drop") %>%
-  # Add total frequencies and reorder tag_type by total count
-  group_by(tag_type) %>%
-  mutate(total_count = sum(tag_count)) %>%
-  ungroup() %>%
-  mutate(tag_type = factor(tag_type, levels = unique(tag_type[order(-total_count)])))
-
-
-tags %>%
-  group_by(start_day, tag_type) %>%
-  summarise(tag_count = n(), .groups = "drop") %>%
-  group_by(tag_type) %>%
-  mutate(total_count = sum(tag_count)) %>%
-  ungroup() %>%
-  mutate(tag_type = factor(tag_type, levels = unique(tag_type[order(total_count)]))) |> 
-  ggplot(aes(x = start_day, y = tag_type, size = tag_count)) +
-  geom_point(alpha = 0.3) +  
-  scale_size_area(max_size = 5) +  
-  labs(title = "Tag Type Frequency Over Time")
 
 
 # Define custom tags for medical interventions ------------------------------
 
 treatment_dates <- tribble(
   ~treatment_start, ~treatment_end, ~treatment, ~treatment_dose,
-  "2023-06-14", "2023-08-20", "Candesartan", "4mg",
-  "2024-12-18", "2025-01-09", "Candesartan", "escalating 4mg to 12mg") |>
+  "2023-06-14", "2023-08-20", "Candesartan 4mg", 1,
+  "2024-12-18", "2024-12-22", "Candesartan 4mg", 1,
+  "2024-12-23", "2024-12-28", "Candesartan 4mg", 2,
+  "2024-12-29", "2025-01-09", "Candesartan 4mg", 3,
+  ) |>
   mutate(treatment_start = ymd(treatment_start),
          treatment_end = ymd(treatment_end))
 
@@ -72,9 +46,9 @@ treatment_dates <- tribble(
 # Gather up data - Migraines ---------------------------------------------------
 
 
-day_transition = 5  
+day_transition = 8  
  # What hour of the day is considered the boundary between one day and the next
- # i.e. a migraine before this hour in the night is assigned to the previous day
+ # i.e. a migraine before this hour in the night is associated with the previous day
 
 migraines <- tags |> 
   filter(tag == 'migraine') |> 
@@ -97,33 +71,6 @@ migraine_days <- migraines |>
 
 #migraine_days
 
-# ANALYSIS: to decide on 5am as reasonable transition time
-migraines |>
-  mutate(first_of_series = (migraine_last_hrs > (2 * 24)) |> coalesce(FALSE)) |> 
-  mutate(time = hms::as_hms(migraine_time_local)) |>
-  ggplot(aes(x = time)) +
-  geom_histogram(bins = 12, boundary = 0) +
-  scale_x_time(breaks = scales::breaks_timespan(unit = "hours", n = 8)) +
-  facet_wrap( ~ first_of_series, labeller = "label_both") +
-  labs(title = "Most migraines in evening, especially first of a run")
-
-# # ANALYSIS: of intervals
-# # Shows clear peak around 24h, and another 
-# migraines |> 
-#   ggplot(aes(x = migraine_last_hrs / 24)) +
-#   geom_density(adjust = 0.4) +
-#   scale_x_log10(breaks = scales::breaks_log(n = 10)) +
-#   labs(title = "Two peaks - at 24h, and 3-7 days")
-# 
-# # ANALYSIS: of days of week
-# migraines |> 
-#   mutate(first_of_series = (migraine_last_hrs > (2 * 24)) |> coalesce(FALSE)) |> 
-#   ggplot(aes(x = wday(migraine_time, label = TRUE, week_start = 1))) +
-#   geom_bar() +
-#   facet_wrap( ~ first_of_series, labeller = "label_both") +
-#   labs(title = "Migraines more common at the weekend",
-#        x = "Day of week",
-#   )
 
 
 # Gather up data - other interesting tags ---------------------------------
