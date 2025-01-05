@@ -6,7 +6,7 @@ library(lubridate)
 
 
 # OURA API functions ------------------------------------------------------
-# Written by Claude on 26/12/24
+# Written mostly by Claude on 26/12/24, guided by me
 
 #' Oura API Client class
 #' @description A client for interacting with the Oura API
@@ -127,7 +127,7 @@ create_oura_client <- function(token) {
 
 
 
-# Fetch the tags ----------------------------------------------------------
+# Fetch the data ----------------------------------------------------------
 
 # Examples of unused methods
 
@@ -135,7 +135,9 @@ create_oura_client <- function(token) {
 #single_workout <- oura$workouts$get_single("workout_id")
 #single_activity <- oura$daily_activity$get_single("activity_id")
 
-include("secrets.R") # this just sets the API key used below. Not included in github.
+
+
+source("secrets.R") # this just sets the API key used below. Not included in github.
 oura <- create_oura_client(oura_api_key)
 
 first_date <- "2022-11-03"
@@ -170,7 +172,8 @@ tags <- tibble(
   comment = fetch$comment,
   custom_name = fetch$custom_name
 )  |> 
-  # Clean up tag types by removing prefix
+  # Clean up tag types 
+  mutate(tag_type = coalesce(custom_name, tag_type)) |> 
   mutate(tag_type = str_remove(tag_type, "tag_generic_|tag_sleep_"),
          tag = if_else(tag_type %in% alcohol_variations,
                                     'alc_drink',
@@ -178,7 +181,6 @@ tags <- tibble(
          .after = tag_type) |> 
   mutate(tz_offset = as.numeric(difftime(start_time_local, start_time, units = "hours")),
          .before = start_time_local) |> 
-  mutate(tag_type = coalesce(custom_name, tag_type)) |> 
   arrange(start_time)
 
 
@@ -187,6 +189,8 @@ tags <- tibble(
 fetch <- oura$workouts$fetch(first_date, last_date)
 
 intense_activities <- c('running','cycling','downhillSkiing')
+# ... this unused as my workouts of this type which were imported from Strava
+# or similar don't actually appear in the data
 
 workouts <- tibble(
   #id = fetch$id,
@@ -208,6 +212,9 @@ workouts <- tibble(
 fetch <- oura$daily_activity$fetch(first_date, last_date)
 
 # # Code to view the history of MET for a single day
+# # Looks like the values a set very precisely from the Oura ring and as a single
+# # value for a longer duration imported workout.
+
 # obs <- unlist(fetch$met$items[761])
 # times <- seq(from = 0, by = 1, length.out = length(obs)) / 60
 # df <-  tibble(time = times, met = obs)
