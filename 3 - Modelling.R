@@ -69,7 +69,8 @@ model <- glm(
     is_sunday +
     extra_coffee +
     any_stress +
-    any_medication +
+    #any_medication +
+    medication_dose +
     #any_travel +
     any_plane +
     #weekday +
@@ -202,7 +203,8 @@ model_final <- glm(
     is_saturday + 
     is_sunday + 
     any_plane +
-    any_medication +
+    any_travel +
+    medication_dose +
     extra_coffee +
     migraine_yesterday +
     weeks_since_last +
@@ -211,6 +213,7 @@ model_final <- glm(
     activity_sedentary_hrs_c +
     activity_resting_hrs_c +
     drink_session_biggest +
+    drink_sessions_gt1 +
     drinks_any +
     drink_any_wine,
   
@@ -222,6 +225,17 @@ model_final <- glm(
 # Jtools summary
 summ(model_final, exp = TRUE, vif = TRUE)
 
+# Plot summary
+plot_summs(model_final, 
+           exp = TRUE, inner_ci_level = 0.67) +
+  #scale_x_log10(breaks = scales::breaks_log(n = 18)) +
+  scale_x_log10(breaks = c(0.3, 0.4, 0.5, 0.7, 1, 1.5, 2, 3, 4, 5, 6)) +
+  coord_cartesian(xlim = c(0.3, 6)) +
+  labs(title = "Migraine model - predicting p(migraine) on a day", 
+       subtitle = "Time period used: 2022-11-02 to 2025-01-04",
+       x = "Odds ratio")
+
+# Plot - compare with other models
 plot_summs(model_final, 
            model, 
            stepwise_model, 
@@ -326,18 +340,84 @@ ggplot(calibration_data, aes(x = mean_predicted, y = observed_proportion, label 
 
 library(brms)
 library(bayesplot)
+library(splines)
+
+#' Here's what Claude thought as a summary of research evidence, useful to inform priors:
+#'Let me help analyze the potential priors for your Bayesian model based on published research. Note that I'll be drawing from research up to early 2024, and you should verify these specific numbers against current literature.
+# For episodic migraines (most research focuses on these rather than chronic migraines):
+#   Frequency and Clustering:
+#   
+#   Research suggests migraines do tend to cluster, with increased probability of occurrence within 1-3 days of a previous migraine
+# Baseline frequency prior could center around 1-4 migraines per month (median from population studies)
+# After 2 weeks without a migraine, probability tends toward the baseline rather than increasing
+# 
+# Day of Week:
+#   
+#   Studies show a slight increase in probability for weekdays vs weekends (about 20% higher)
+# Monday typically shows the highest relative risk (around 1.2x compared to Sunday)
+# 
+# Transportation:
+#   
+#   Long car/train journeys: Studies suggest about 25-30% of migraineurs report these as triggers
+# Air travel: Research links this to increased risk, particularly during descent (pressure changes), with roughly 20-40% reporting it as a trigger
+# Consider using a relative risk multiplier of 1.5-2x for days with extended travel
+# 
+# Coffee:
+#   
+#   Complex relationship - both protective and triggering effects reported
+# Withdrawal is a strong trigger (relative risk ~2-3x)
+# Regular moderate consumption (1-2 cups) shows slight protective effect
+# High consumption (>3 cups) shows increased risk
+# 
+# Candesartan:
+#   
+#   Clinical trials show reduction in migraine days by 30-50%
+# Consider a multiplier of 0.5-0.7 on baseline probability when medication is consistent
+# Takes 4-6 weeks to reach full effect
+# 
+# Activity Levels:
+#   
+#   High intensity: Mixed evidence - can be protective or triggering
+# Moderate activity: Generally protective, reducing frequency by 20-30%
+# Sedentary behavior: Associated with increased risk (~1.2-1.5x)
+# Sleep: Strong U-shaped relationship
+# 
+# Optimal 7-8 hours shows lowest risk
+# Both <6 and >9 hours associated with ~2x risk increase
+# 
+# Alcohol:
+#   
+#   Overall relative risk increase of 1.5-2x for any alcohol consumption
+# Wine shows strongest association (2-3x risk increase)
+# Beer shows lower but still significant risk (1.3-1.5x)
+# Dose-dependent relationship: Each drink increases risk by approximately 40%
+# Time course: Risk peaks 4-12 hours after consumption
 
 prior <- c(
-  set_prior("normal(0, 2)", class = "b"),      # Priors for coefficients
-  set_prior("normal(0, 3)", class = "Intercept") # Prior for intercept
+  # Expect to be triggers...
+  set_prior("normal(1, 1)", class = "b", coef = "any_planeTRUE"),  
+  set_prior("normal(1, 1)", class = "b", coef = "any_travelTRUE"),  
+  #set_prior("normal(1, 1)", class = "b", coef = "migraine_yesterdayTRUE"),  
+  set_prior("normal(1, 1)", class = "b", coef = "drink_sessions_gt1"),  
+  set_prior("normal(1, 1)", class = "b", coef = "drink_session_biggest"),  
+  set_prior("normal(1, 1)", class = "b", coef = "drinks_anyTRUE"),  
+  set_prior("normal(1, 1)", class = "b", coef = "drink_any_wine"),  
+  
+  # Expect to be protective...
+  set_prior("normal(-0.7, 0.5)", class = "b", coef = "any_medicationTRUE"),  
+  set_prior("normal(-0.5, 0.5)", class = "b", coef = "activity_med_hrs"),  
+  
+  # Add priors for the spline
+  set_prior("normal(0, 0.5)", class = "sds"), # Wiggliness of smooth
+  # Expecting strongest effect in first few days (clustering)
+  # then gradual return to baseline
+  set_prior("normal(0, 1)", class = "b", coef = "slogdays_since_last_1"),
+  
+  # No particular expectation...
+  set_prior("student_t(3, 0, 2)", class = "b"),
+  # General baseline is infrequent...
+  set_prior("normal(-2, 2)", class = "Intercept") 
 )
-
-# priors <- c(
-#   set_prior("normal(1, 1)", class = "b", coef = "high_activity_hrs"),  # Positive effect
-#   set_prior("normal(-1, 1)", class = "b", coef = "weeks_since_last"), # Negative effect
-#   set_prior("normal(0.5, 1)", class = "b", coef = "is_saturday"),     # Positive
-#   set_prior("normal(0, 2)", class = "b")                              # Weakly informative for others
-#)
 
 
 bayes_model <- brm(
@@ -345,10 +425,13 @@ bayes_model <- brm(
     is_saturday + 
     is_sunday + 
     any_plane +
+    any_travel +
     any_medication +
     extra_coffee +
-    migraine_yesterday +
-    weeks_since_last +
+    # Replace binary yesterday + weeks_since with spline
+    s(log(days_since_last), k = 9, bs = "bs") +  
+    #migraine_yesterday +
+    #weeks_since_last +
     activity_high_hrs +
     activity_med_hrs +
     activity_low_hrs +
@@ -361,8 +444,15 @@ bayes_model <- brm(
   ,
   data = model_data_days,
   family = bernoulli(link = "logit"),
-  prior = prior
+  prior = prior,
+  iter = 4000,
+  warmup = 1000,
+  control = list(
+    adapt_delta = 0.95,
+    max_treedepth = 12
+  )
 )
+
 
 # Check priors
 prior_summary(bayes_model)       
@@ -376,13 +466,25 @@ plot(bayes_model)
 # Posterior predictive checks
 pp_check(bayes_model, type = "bars")
 
+# Visualize the spline effect
+conditional_effects(bayes_model, "days_since_last")
+
+# Enhanced diagnostics focused on spline behavior
+plot(conditional_smooths(bayes_model), ask = FALSE)
+pp_check(bayes_model, type = "intervals_grouped", group = "any_medication")
+
+
+
+
+# Detailed outputs --------------------------------------------------------
+
 
 
 # Posterior samples
 
 posterior_samples <- as.array(bayes_model)
 parameter_names <- dimnames(posterior_samples)$variable
-filtered_parameters <- parameter_names[!parameter_names %in% c("Intercept", "lprior", "lp__")]
+filtered_parameters <- parameter_names[!parameter_names %in% c("Intercept","b_Intercept", "lprior", "lp__")]
 posterior_clean <- posterior_samples[,,filtered_parameters]
 
 posterior_samples |> view()
