@@ -34,10 +34,11 @@ if (fetch_data) {
 
 treatment_dates <- tribble(
   ~treatment_start, ~treatment_end, ~treatment, ~treatment_dose,
-  "2023-06-14", "2023-08-20", "Candesartan 4mg", 1,
-  "2024-12-18", "2024-12-22", "Candesartan 4mg", 1,
-  "2024-12-23", "2024-12-28", "Candesartan 4mg", 2,
-  "2024-12-29", "2025-01-09", "Candesartan 4mg", 3,
+  "2023-06-14", "2023-08-20", "Candesartan 8mg", 0.5,
+  "2024-12-18", "2024-12-22", "Candesartan 8mg", 0.5,
+  "2024-12-23", "2024-12-28", "Candesartan 8mg", 1,
+  "2024-12-29", "2025-01-12", "Candesartan 8mg", 1.5,
+  "2025-01-13", "2025-04-09", "Candesartan 8mg", 2,
   ) |>
   mutate(treatment_start = ymd(treatment_start),
          treatment_end = ymd(treatment_end))
@@ -140,7 +141,7 @@ drink_days <-
 
 drink_days |> glimpse()
 
-# #ANALYSIS: the time intervals to define series...
+#ANALYSIS: the time intervals to define series...
 # drinks |>
 #   mutate(time_diff = as.numeric(difftime(drink_time, drink_last, units = "hours")),
 #          time = hms::as_hms(drink_last),
@@ -188,7 +189,8 @@ model_data_days <- spine |>
   
   # Bring in treatments
   left_join(treatment_dates, by = join_by(between(date, treatment_start, treatment_end))) |>
-  mutate(any_medication = !is.na(treatment)) |>
+  mutate(any_medication = !is.na(treatment),
+         medication_dose = coalesce(treatment_dose, 0)) |>
   select(-starts_with('treatment')) |>
   
   # Bring in drinks data
@@ -229,6 +231,8 @@ model_data_days <- spine |>
          activity_sedentary_hrs_c = activity_sedentary_hrs - mean(activity_sedentary_hrs, na.rm = TRUE),
          activity_resting_hrs_c = activity_resting_hrs - mean(activity_resting_hrs, na.rm = TRUE),
   ) |> 
+    # Centered versions of activity features - half-finished??
+  #mutate(across(contains('hrs'), ~) |>
     # Activity scaled as per 10 units
   mutate(drinks_any = (drinks_total > 0),
          activity_medhigh_hrs = activity_high_hrs + activity_med_hrs) |> 

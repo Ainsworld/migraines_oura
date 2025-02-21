@@ -141,7 +141,7 @@ source("secrets.R") # this just sets the API key used below. Not included in git
 oura <- create_oura_client(oura_api_key)
 
 first_date <- "2022-11-03"
-last_date <- "2025-01-04"
+last_date <- "2025-02-19"
 
 
 
