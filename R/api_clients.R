@@ -44,7 +44,7 @@ ApiClient <- R6::R6Class("ApiClient",
 OuraClient <- R6::R6Class("OuraClient",
                           inherit = ApiClient,
                           public = list(
-                            initialize = function(token = get_secret("OURA_PAT")) {
+                            initialize = function(token = get_secret("OURA_API_KEY")) {
                               # Pass to parent initialize
                               super$initialize("https://api.ouraring.com/v2/usercollection", token)
                               
