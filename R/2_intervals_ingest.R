@@ -5,7 +5,7 @@ library(purrr)
 
 # --- Setup --------------------------------------------------------------------
 first_date <- as.Date("2022-11-03") 
-last_date  <- Sys.Date()
+last_date  <- Sys.Date() - 1
 
 message(sprintf("🚀 Starting Intervals Ingest (%s to %s)", first_date, last_date))
 
@@ -20,39 +20,58 @@ raw_activities <- intervals$get_activities(
 
 message(sprintf("   ✔ Index fetched: %d activities found.", nrow(raw_activities)))
 
-# --- 2. Create 'Strava-Like' Workouts Table -----------------------------------
-# Goal: Complement the Oura 'workouts' table.
-# We map Intervals fields to match the Oura schema you provided.
-
+# --- 2. Clean & Normalize Workouts --------------------------------------------
 intervals_workouts <- raw_activities |>
+  # Filter: Keep only valid activities with duration
+  filter(!is.na(moving_time), moving_time > 0) |>
   mutate(
     start_time = ymd_hms(start_date_local),
     end_time = start_time + seconds(moving_time),
-    start_day = as.Date(start_time)
+    start_day = as.Date(start_time),
+    type_clean = str_to_lower(type) 
   ) |>
   select(
-    # Core Keys
-    id,
-    start_time,
-    end_time,
-    start_day,
+    # --- Core Identifiers ---
+    id, 
+    start_time, 
+    end_time, 
+    start_day, 
+    activity_type = type_clean,
+    source = source,
+    label = name, # Useful for manual spot-checking (e.g. "Morning Ride")
     
-    # Dimensions (Renamed to match Oura 'workouts' glimpse where possible)
-    activity_type = type,
-    duration = moving_time,    # Intervals uses seconds, same as Oura
+    # --- Key Metrics (Used in Model) ---
+    duration = moving_time, 
     distance = distance,
     calories = calories,
     
-    # Metrics specific to Training
+    # --- Physiological Load ---
     average_hr = average_heartrate,
-    max_hr = max_heartrate,
-    average_watts = average_watts,
-    norm_power = normalized_power,
-    training_load = icu_training_load,
-    intensity = intensity # e.g. "85" (score) or zone label
+    max_hr = max_heartrate,          # Added: Useful for checking intensity limits
+    
+    # --- Power Data (Cycling Specific) ---
+    # Using 'icu_' prefixes as they are often more reliable in the export
+    average_watts = icu_average_watts,
+    norm_power = icu_weighted_avg_watts, # 'Normalized Power' equivalent
+    
+    # --- Training Load Calculations ---
+    icu_training_load = icu_training_load,
+    icu_intensity = icu_intensity        # Internal intensity score
+    
+    # --- NOTES ON UNUSED FIELDS (Future Me) ---
+    # 1. Power Curves (icu_pm_*, icu_rolling_*): Detailed CP/W' models. Overkill for daily aggregation.
+    # 2. Weather (average_temp, wind_*): Available but inconsistent across devices/indoors.
+    # 3. Gear (gear_*): Bike/Shoe tracking. Not relevant for physio stress.
+    # 4. Streams/Bytes (skyline_*, stream_types): Binary blob data for charts.
+    # 5. RPE/Feel: Subjective data often missing or inconsistent.
   ) |>
-  mutate(source = "Intervals.icu") |>
+  mutate(
+    duration = as.difftime(duration, units = "secs")
+  ) |>
   as_tibble()
+
+message(sprintf("   ✔ Cleaned: %d valid activities retained.", nrow(intervals_workouts)))
+
 
 # --- 3. Fetch Granular HR Distributions ---------------------------------------
 # Goal: Test "HR Stress" hypothesis by getting exact minutes at specific HRs.
@@ -60,29 +79,51 @@ intervals_workouts <- raw_activities |>
 
 message("   ⬇ Fetching HR distributions (this may take a moment)...")
 
-# Filter to only activities that actually HAVE heart rate data
-hr_activities <- intervals_workouts |> 
+#  Only attempt fetch for activities that actually claim to have HR
+hr_candidates <- intervals_workouts |> 
   filter(!is.na(average_hr), average_hr > 0)
 
-# Safe fetcher function
+# Initialize Progress Bar
+total_fetches <- nrow(hr_candidates)
+pb <- txtProgressBar(min = 0, max = total_fetches, style = 3)
+counter <- 0
+
 fetch_hr_dist <- function(id) {
   tryCatch({
-    # Add small delay to respect API rate limits during bulk fetch
-    Sys.sleep(0.1) 
+    Sys.sleep(0.00) # Set this to something nonzero like 0.05 if intervals' servers complain
     intervals$get_time_at_hr(id)
   }, error = function(e) return(NULL))
 }
 
-# Iterate and bind
-# This creates a long table: Activity ID | HR Bucket | Seconds
-hr_dist_raw <- hr_activities$id |>
+hr_dist_raw <- hr_candidates$id |>
   map_df(function(id) {
+    # Update progress bar
+    counter <<- counter + 1
+    setTxtProgressBar(pb, counter)
+    
     res <- fetch_hr_dist(id)
     if (is.null(res)) return(NULL)
     
-    # Intervals returns a list of buckets. We bind them and tag with ID.
-    as_tibble(res) |> mutate(activity_id = id)
+    df <- as_tibble(res)
+    
+    # FIX: Handle implicit BPM indexing (Histogram format)
+    # The API returns 'min_bpm' and an ordered array of 'secs'.
+    # We must calculate 'bpm' = min_bpm + (row_index - 1).
+    if (!"bpm" %in% names(df) && "min_bpm" %in% names(df)) {
+      df <- df |> mutate(bpm = min_bpm + row_number() - 1)
+    }
+    
+    # Ensure we only keep what we need, avoiding schema conflicts
+    if ("bpm" %in% names(df) && "secs" %in% names(df)) {
+      df |> 
+        select(bpm, secs) |> 
+        mutate(activity_id = id)
+    } else {
+      NULL # Skip malformed responses
+    }
   })
+
+close(pb)
 
 # --- 4. Transform to Daily HR Distributions -----------------------------------
 # Aggregating up to the Day level for the Migraine Model.
@@ -102,4 +143,5 @@ write_rds(daily_hr_dist, "data/intervals_hr_dist.rds")
 
 message(sprintf("✔ Intervals ingest complete."))
 message(sprintf("   - Workouts: %d saved to data/intervals_workouts.rds", nrow(intervals_workouts)))
-message(sprintf("   - HR Data:  %d daily records saved to data/intervals_hr_dist.rds", nrow(daily_hr_dist)))
+message(sprintf("   - HR Data:  %d daily records saved to data/intervals_hr_dist.rds", 
+                daily_hr_dist |> distinct(start_day) |> nrow()))
