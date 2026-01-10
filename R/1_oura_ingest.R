@@ -20,19 +20,19 @@ raw_activity  <- oura$get_endpoint("daily_activity", first_date, last_date)
 raw_readiness <- oura$get_endpoint("daily_readiness", first_date, last_date)
 raw_sleep     <- oura$get_endpoint("daily_sleep", first_date, last_date)
 
-# 2. Tidy & Transform (Replicating '1 - Oura API.R')
+# 2. Tidy & Transform 
 # --------------------------------------------------
 
 # --- Tags ---
 alcohol_variations <- c('alcohol','beer','wine','liquor','Homebrew')
 
-tags <- raw_tags |>
+oura_tags <- raw_tags |>
   mutate(
     # Handle timezone offsets
+    start_time_local = ymd_hms(substr(start_time, 1, 19)),
+    end_time_local = ymd_hms(substr(end_time, 1, 19)),
     start_time = ymd_hms(start_time),
     end_time = ymd_hms(end_time),
-    start_time_local = ymd_hms(substr(start_time_local, 1, 19)),
-    end_time_local = ymd_hms(substr(end_time_local, 1, 19)),
     start_day = ymd(start_day),
     
     # Logic: Clean tag types and normalize alcohol
@@ -45,7 +45,7 @@ tags <- raw_tags |>
   arrange(start_time)
 
 # --- Workouts ---
-workouts <- raw_workouts |>
+oura_workouts <- raw_workouts |>
   mutate(
     start_time = ymd_hms(start_datetime),
     end_time = ymd_hms(end_datetime),
@@ -56,7 +56,7 @@ workouts <- raw_workouts |>
          duration, start_day, distance, intensity, source, label)
 
 # --- Activity ---
-activity <- raw_activity |>
+oura_daily_activity <- raw_activity |>
   mutate(
     start_day = ymd(day),
     # Critical: Your logic converted these to Hours
@@ -69,12 +69,12 @@ activity <- raw_activity |>
   select(start_day, score, active_calories, ends_with("hrs"))
 
 # --- Readiness ---
-readiness <- raw_readiness |>
+oura_daily_readiness <- raw_readiness |>
   mutate(start_day = ymd(day)) |>
   select(start_day, readiness_score = score, temperature_deviation, everything(), -day, -id)
 
 # --- Sleep ---
-sleep <- raw_sleep |>
+oura_daily_sleep <- raw_sleep |>
   mutate(start_day = ymd(day)) |>
   select(start_day, sleep_score = score, everything(), -day, -id)
 
@@ -82,12 +82,12 @@ sleep <- raw_sleep |>
 # --- Save Artifacts -----------------------------------------------------------
 # Saving as a list mimics your 'oura_dataframes.RData' but in a more portable format
 list(
-  tags = tags,
-  workouts = workouts,
-  activity = activity,
-  readiness = readiness,
-  sleep = sleep,
-  sessions = raw_sessions
+  oura_tags = oura_tags,
+  oura_workouts = oura_workouts,
+  oura_daily_activity = oura_daily_activity,
+  oura_daily_readiness = oura_daily_readiness,
+  oura_daily_sleep = oura_daily_sleep,
+  oura_sessions = raw_sessions
 ) |> 
   write_rds("data/oura_tidy.rds")
 
