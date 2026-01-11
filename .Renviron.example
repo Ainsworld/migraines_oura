@@ -1,0 +1,5 @@
+# .Renviron.example (COMMIT THIS)
+# Copy this file to .Renviron and fill in your values
+OURA_API_KEY="your key"
+INTERVALS_API_ATHLETE_ID="your id"
+INTERVALS_API_KEY="your key"
