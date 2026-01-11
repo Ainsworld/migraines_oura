@@ -26,10 +26,12 @@ model_df <- analysis_df |>
     hr_impulse_150_s = 2 * hr_impulse_150 / max(hr_impulse_150),
     hr_impulse_160_s = 2 * hr_impulse_160 / max(hr_impulse_160),
     
-    
     # Ensure factors are clean
     is_saturday = as.logical(is_saturday),
-    migraine_yesterday = as.logical(migraine_yesterday)
+    migraine_yesterday = as.logical(migraine_yesterday),
+    
+    # Define Era for Stratified Analysis
+    era = if_else(date >= as.Date("2025-01-01"), "2025+ (Medicated)", "Pre-2025 (Unmedicated)")
   )
 
 # --- 3. Model Specification ---------------------------------------------------
@@ -120,3 +122,52 @@ if (summary(m4_inter)$coefficients["impulse_10bh:ebac_drink", "Pr(>|z|)"] < 0.15
       y = "Predicted Probability"
     )
 }
+
+
+
+
+# --- 6. Prediction Calibration (Stratified by Era) ----------------------------
+
+# Generate predictions from the full Interaction Model (M4)
+calibration_df <- model_df |>
+  mutate(pred_prob = predict(m3_physio2, type = "response"))
+
+# Create Calibration Bins
+# We group predicted probabilities into 10% bins (0-10%, 10-20%...)
+cal_plot_data <- calibration_df |>
+  mutate(
+    bin = cut(pred_prob, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE)
+  ) |>
+  group_by(era, bin) |>
+  summarise(
+    mean_pred = mean(pred_prob),
+    obs_rate = mean(migraine),
+    n = n(),
+    se = sqrt((obs_rate * (1 - obs_rate)) / n), # Standard Error for proportion
+    .groups = "drop"
+  ) |>
+  # Filter out empty bins to avoid plotting noise
+  filter(n >= 5)
+
+# Plot: Predicted vs Observed
+ggplot(cal_plot_data, aes(x = mean_pred, y = obs_rate, color = era)) +
+  # Perfect Calibration Line (Diagonal)
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+  
+  # Error Bars (Observed Uncertainty)
+  geom_errorbar(aes(ymin = pmax(0, obs_rate - 1.96*se), ymax = obs_rate + 1.96*se), width = 0.02, linewidth = 0.75, alpha = 0.5) +
+  
+  # Data Points
+  geom_point(aes(size = n), alpha = 0.8) +
+  geom_line(linewidth = 1) +
+  
+  scale_color_manual(values = c("Pre-2025 (Unmedicated)" = "grey40", "2025+ (Medicated)" = "#DD5511")) +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) + # Zoom in on the relevant range
+  labs(
+    title = "Model Calibration by Era",
+    subtitle = "Does the model (trained on all data) over/under-predict in different periods?",
+    x = "Predicted Probability (Model Risk)",
+    y = "Observed Migraine Rate (Actual Risk)",
+    size = "Days in Bin"
+  ) +
+  theme_minimal()
