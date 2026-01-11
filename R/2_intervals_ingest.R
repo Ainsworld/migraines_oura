@@ -90,7 +90,7 @@ counter <- 0
 
 fetch_hr_dist <- function(id) {
   tryCatch({
-    Sys.sleep(0.00) # Set this to something nonzero like 0.05 if intervals' servers complain
+    Sys.sleep(0.1) # Set this to something nonzero like 0.2 if lots go missing
     intervals$get_time_at_hr(id)
   }, error = function(e) return(NULL))
 }
@@ -106,20 +106,28 @@ hr_dist_raw <- hr_candidates$id |>
     
     df <- as_tibble(res)
     
-    # FIX: Handle implicit BPM indexing (Histogram format)
-    # The API returns 'min_bpm' and an ordered array of 'secs'.
-    # We must calculate 'bpm' = min_bpm + (row_index - 1).
-    if (!"bpm" %in% names(df) && "min_bpm" %in% names(df)) {
-      df <- df |> mutate(bpm = min_bpm + row_number() - 1)
-    }
+    # FIX: Explicitly handle the List structure (min_bpm scalar + secs vector)
+    # The API returns a list like $min_bpm = 110, $secs = c(15, 5, 1...)
+    # DIAGNOSIS: The distribution is REVERSED. 
+    # secs[1] corresponds to the HIGHEST BPM (max_bpm).
     
-    # Ensure we only keep what we need, avoiding schema conflicts
-    if ("bpm" %in% names(df) && "secs" %in% names(df)) {
-      df |> 
-        select(bpm, secs) |> 
-        mutate(activity_id = id)
+    if (!is.null(res$secs) && !is.null(res$min_bpm)) {
+      # Calculate the max bpm implied by the vector length
+      implied_max <- res$min_bpm + length(res$secs) - 1
+      
+      # Construct sequence descending from Max to Min
+      bpm_seq <- seq(from = implied_max, to = res$min_bpm, by = -1)
+      
+      tibble(
+        activity_id = id,
+        bpm = bpm_seq,
+        seconds = as.integer(res$secs)
+      )
+    } else if (is.data.frame(res)) {
+      # Fallback: Sometimes it might return a DF (e.g. from JSON array)
+      as_tibble(res) |> mutate(activity_id = id)
     } else {
-      NULL # Skip malformed responses
+      NULL 
     }
   })
 
@@ -134,7 +142,7 @@ daily_hr_dist <- hr_dist_raw |>
   # Intervals buckets are often 1-bpm width. We can bin them if needed later.
   # For now, we keep the raw "HR -> Seconds" mapping.
   group_by(start_day, bpm) |>
-  summarise(seconds = sum(secs, na.rm = TRUE), .groups = "drop") |>
+  summarise(seconds = sum(seconds, na.rm = TRUE), .groups = "drop") |>
   arrange(start_day, bpm)
 
 # --- Save Artifacts -----------------------------------------------------------
