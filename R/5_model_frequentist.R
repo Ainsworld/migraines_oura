@@ -41,6 +41,7 @@ model_df <- analysis_df |>
 m1_base <- glm(
   migraine ~ 
     is_saturday + 
+    is_sunday + 
     migraine_yesterday + 
     weeks_since_last_max1,
   data = model_df,

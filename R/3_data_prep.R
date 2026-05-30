@@ -90,28 +90,28 @@ daily_hr_features <- intervals_hr_dist |>
   summarise(
     # A. Simple Duration (The Base Rate)
     # "Hours spent in the danger zone"
-    hr_hrs_gt_140 = sum(seconds[bpm >= 140], na.rm = TRUE) / 3600,
-    hr_hrs_gt_150 = sum(seconds[bpm >= 150], na.rm = TRUE) / 3600,
-    hr_hrs_gt_160 = sum(seconds[bpm >= 160], na.rm = TRUE) / 3600,
-    hr_hrs_140_150 = sum(seconds[bpm >= 140 & bpm < 150], na.rm = TRUE) / 3600,
-    hr_hrs_150_160 = sum(seconds[bpm >= 150 & bpm < 160], na.rm = TRUE) / 3600,
+    hr_mins_gt_140 = sum(seconds[bpm >= 140], na.rm = TRUE) / 60,
+    hr_mins_gt_150 = sum(seconds[bpm >= 150], na.rm = TRUE) / 60,
+    hr_mins_gt_160 = sum(seconds[bpm >= 160], na.rm = TRUE) / 60,
+    hr_mins_140_150 = sum(seconds[bpm >= 140 & bpm < 150], na.rm = TRUE) / 60,
+    hr_mins_150_160 = sum(seconds[bpm >= 150 & bpm < 160], na.rm = TRUE) / 60,
   
     # B. Linear Impulse (Excess Beats)
     # "How many EXTRA heartbeats did I spend above the threshold?"
     # Captures intensity: 1 min at 170 counts double 1 min at 160 (vs 150 baseline)
     # Unit: Beat-Hours. 
     # Value of 10 = "10 beats over threshold for 1 hour" (or 20 beats for 30 mins)
-    hr_impulse_140 = sum(pmax(0, bpm - 140) * seconds, na.rm = TRUE) / 3600,
-    hr_impulse_150 = sum(pmax(0, bpm - 150) * seconds, na.rm = TRUE) / 3600,
-    hr_impulse_160 = sum(pmax(0, bpm - 160) * seconds, na.rm = TRUE) / 3600,
+    hr_impulse_140 = sum(pmax(0, bpm - 140) * seconds, na.rm = TRUE) / 60,
+    hr_impulse_150 = sum(pmax(0, bpm - 150) * seconds, na.rm = TRUE) / 60,
+    hr_impulse_160 = sum(pmax(0, bpm - 160) * seconds, na.rm = TRUE) / 60,
  
     # C. Quadratic Strain (Non-Linear Cost)
     # Penalizes the extreme efforts heavily.
     # Unit: 100-Beat²-Hours.
     # Scaled by 360,000 to keep range 0-100 approx.
-    hr_strain_140_sq = sum((pmax(0, bpm - 140)^2) * seconds, na.rm = TRUE) / 360000,
-    hr_strain_150_sq = sum((pmax(0, bpm - 150)^2) * seconds, na.rm = TRUE) / 360000,
-    hr_strain_160_sq = sum((pmax(0, bpm - 160)^2) * seconds, na.rm = TRUE) / 360000,
+    hr_strain_140_sq = sum((pmax(0, bpm - 140)^2) * seconds, na.rm = TRUE) / 6000,
+    hr_strain_150_sq = sum((pmax(0, bpm - 150)^2) * seconds, na.rm = TRUE) / 6000,
+    hr_strain_160_sq = sum((pmax(0, bpm - 160)^2) * seconds, na.rm = TRUE) / 6000,
 
     # D. Physiological Load (Relative to Homeostasis)
     # "Net Cardiac Impulse": Total extra beats above resting baseline.
@@ -138,7 +138,9 @@ treatment_dates <- tribble(
   "2024-12-23", "2024-12-28", "Candesartan 8mg", 1,
   "2024-12-29", "2025-01-12", "Candesartan 8mg", 1.5,
   "2025-01-13", "2025-08-28", "Candesartan 8mg", 2,
-  "2025-08-29", as.character(Sys.Date()), "Candesartan 8mg", 1.5,
+  "2025-08-29", "2026-03-19", "Candesartan 8mg", 1.5,
+  "2026-03-19", "2026-05-17", "Candesartan 8mg", 2,
+  "2026-05-17", as.character(Sys.Date()), "Candesartan 8mg", 1.5,
 ) |>
   mutate(treatment_start = ymd(treatment_start),
          treatment_end = ymd(treatment_end))
@@ -310,6 +312,7 @@ analysis_df <- spine |>
   mutate(
     is_weekend = wday(date, week_start = 1) >= 6,
     is_saturday = wday(date, week_start = 1) == 6,
+    is_sunday = wday(date, week_start = 1) == 7,
     weekday = wday(date, week_start = 1, label = TRUE)
   ) |>
   left_join(
@@ -320,12 +323,14 @@ analysis_df <- spine |>
     prev_migraine = coalesce(prev_migraine, migraine_before_data),
     days_since_last = as.numeric(difftime(date, prev_migraine, units = "days")),
     weeks_since_last = days_since_last / 7,
-    weeks_since_last_max1 = pmin(1, weeks_since_last)
+    weeks_since_last_max1 = pmin(1, weeks_since_last),
+    migraine_yesterday = coalesce(days_since_last == 1, FALSE)
   ) |>
   
   # 2. Join Treatments, Drinks, Events
   left_join(treatment_dates, by = join_by(between(date, treatment_start, treatment_end))) |>
-  mutate(any_medication = !is.na(treatment)) |>
+  mutate(any_medication = !is.na(treatment)) |> 
+  rename(medication_dose = treatment_dose) |>
   select(-starts_with('treatment')) |>
   left_join(drink_days, by = "date") |>
   left_join(event_days, by = "date") |>
@@ -346,6 +351,7 @@ analysis_df <- spine |>
              total_duration_mins, total_active_cals, 
              sport_duration_mins, life_duration_mins, activity_duration_mins,
              net_cardiac_impulse, homeostatic_strain, 
+             medication_dose,
              starts_with("hr_")), # Picks up loads of the HR-distribution metrics
            ~replace_na(., 0)),
     across(c(has_tracked_sport), ~replace_na(., FALSE)),
