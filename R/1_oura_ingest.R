@@ -28,18 +28,25 @@ alcohol_variations <- c('alcohol','beer','wine','liquor','Homebrew')
 
 oura_tags <- raw_tags |>
   mutate(
-    # Handle timezone offsets
     start_time_local = ymd_hms(substr(start_time, 1, 19)),
-    end_time_local = ymd_hms(substr(end_time, 1, 19)),
+    end_time_local   = ymd_hms(substr(end_time, 1, 19)),
     start_time = ymd_hms(start_time),
-    end_time = ymd_hms(end_time),
-    start_day = ymd(start_day),
+    end_time   = ymd_hms(end_time),
+    start_day  = ymd(start_day),
+    end_day    = suppressWarnings(ymd(end_day)),
     
-    # Logic: Clean tag types and normalize alcohol
+    # Date-spanning tags: end_time is NULL but end_day differs from start_day.
+    spans_date       = !is.na(end_day) & end_day != start_day,
+    end_time_imputed = is.na(end_time_local) & spans_date,
+    # Conservative, FLAGGED placeholder so the timestamp is orderable. Consumers
+    # should branch on `spans_date`/`end_time_imputed`, not trust this value.
+    # 08:00 on end_day aligns with the downstream day-transition convention.
+    end_time_local = if_else(end_time_imputed,
+                             as_datetime(end_day) + hours(8), end_time_local),
+    
     tag_type = coalesce(custom_name, tag_type_code),
     tag_type = str_remove(tag_type, "tag_generic_|tag_sleep_"),
     tag = if_else(tag_type %in% alcohol_variations, 'alc_drink', tag_type),
-    
     tz_offset = as.numeric(difftime(start_time_local, start_time, units = "hours"))
   ) |>
   arrange(start_time)
