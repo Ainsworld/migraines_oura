@@ -133,6 +133,10 @@ hr_dist_raw <- hr_candidates$id |>
 
 close(pb)
 
+hr_dist_activity <- hr_dist_raw |>
+  left_join(select(intervals_workouts, id, start_time, end_time, start_day),
+            by = c("activity_id" = "id"))
+
 # --- 4. Transform to Daily HR Distributions -----------------------------------
 # Aggregating up to the Day level for the Migraine Model.
 # We create a 'Histogram' per day.
@@ -148,6 +152,7 @@ daily_hr_dist <- hr_dist_raw |>
 # --- Save Artifacts -----------------------------------------------------------
 write_rds(intervals_workouts, "data/intervals_workouts.rds")
 write_rds(daily_hr_dist, "data/intervals_hr_dist.rds")
+write_rds(hr_dist_activity, "data/intervals_hr_dist_activity.rds")
 
 message(sprintf("✔ Intervals ingest complete."))
 message(sprintf("   - Workouts: %d saved to data/intervals_workouts.rds", nrow(intervals_workouts)))
