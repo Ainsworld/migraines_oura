@@ -72,6 +72,56 @@ intervals_workouts <- raw_activities |>
 
 message(sprintf("   ✔ Cleaned: %d valid activities retained.", nrow(intervals_workouts)))
 
+# --- 2b. Resolve within-Intervals overlapping duplicates ----------------------
+# Strategy: when activities overlap, keep the one with the best HR data.
+# "Best" = has average_hr > 0, then longest duration as tiebreaker.
+# The non-HR entry (e.g. power-only NordicTrack ride) is dropped from the
+# canonical set but its id is flagged so you can audit if needed.
+
+intervals_workouts_raw <- intervals_workouts
+
+# Find genuinely overlapping pairs (A starts before B ends AND A ends after B starts)
+# Exclude self-matches and touching-but-not-overlapping (strict inequalities).
+overlapping_pairs <- intervals_workouts |>
+  select(id_a = id, start_a = start_time, end_a = end_time, hr_a = average_hr) |>
+  inner_join(
+    intervals_workouts |> select(id_b = id, start_b = start_time, end_b = end_time, hr_b = average_hr),
+    by = join_by(start_a < end_b, end_a > start_b),   # strict overlap, no touching
+    relationship = "many-to-many"
+  ) |>
+  filter(id_a < id_b)   # keep each pair once (avoid A-B and B-A)
+
+message(sprintf("   ℹ Overlapping pairs found: %d", nrow(overlapping_pairs)))
+
+# From each overlapping pair, mark the inferior one for removal.
+# Inferior = no HR when partner has HR; tiebreak = shorter duration.
+ids_to_drop <- overlapping_pairs |>
+  mutate(
+    has_hr_a = !is.na(hr_a) & hr_a > 0,
+    has_hr_b = !is.na(hr_b) & hr_b > 0,
+    drop = case_when(
+      has_hr_a & !has_hr_b ~ id_b,   # A has HR, B doesn't -> drop B
+      has_hr_b & !has_hr_a ~ id_a,   # B has HR, A doesn't -> drop A
+      TRUE ~ id_b                     # both or neither have HR -> drop later-id (arbitrary)
+    )
+  ) |>
+  pull(drop) |>
+  unique()
+
+message(sprintf("   ✔ Overlap dedup: %d activities flagged for removal.", length(ids_to_drop)))
+
+intervals_workouts_deduped <- intervals_workouts |>
+  filter(!id %in% ids_to_drop)
+
+n_dropped <- nrow(intervals_workouts) - nrow(intervals_workouts_deduped)
+message(sprintf("   ✔ %d -> %d activities after dedup.", nrow(intervals_workouts), nrow(intervals_workouts_deduped)))
+
+intervals_workouts <- intervals_workouts_deduped
+
+dropped_ids <- setdiff(
+  intervals_workouts_raw |> pull(id),   
+  intervals_workouts |> pull(id)
+)
 
 # --- 3. Fetch Granular HR Distributions ---------------------------------------
 # Goal: Test "HR Stress" hypothesis by getting exact minutes at specific HRs.
@@ -150,6 +200,7 @@ daily_hr_dist <- hr_dist_raw |>
   arrange(start_day, bpm)
 
 # --- Save Artifacts -----------------------------------------------------------
+
 write_rds(intervals_workouts, "data/intervals_workouts.rds")
 write_rds(daily_hr_dist, "data/intervals_hr_dist.rds")
 write_rds(hr_dist_activity, "data/intervals_hr_dist_activity.rds")
