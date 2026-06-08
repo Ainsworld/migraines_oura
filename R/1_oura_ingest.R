@@ -1,4 +1,5 @@
 source("R/api_clients.R")
+source("R/config.R")
 library(tidyverse)
 library(lubridate)
 
@@ -24,7 +25,7 @@ raw_sleep     <- oura$get_endpoint("daily_sleep", first_date, last_date)
 # --------------------------------------------------
 
 # --- Tags ---
-alcohol_variations <- c('alcohol','beer','wine','liquor','Homebrew')
+# alcohol_variations comes from config.R — edit there to match your tag vocabulary
 
 oura_tags <- raw_tags |>
   mutate(
